@@ -64,11 +64,6 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
     // StatusCode::CANCELLED otherwise
     //
 
-    // Initiate ClientWriter
-    dfs_service::FileTransferResponse response;
-    grpc::ClientContext context;
-    std::unique_ptr<ClientWriter<dfs_service::FileTransferChunk>> writer = service_stub->StoreFile(&context, &response);
-
     // Try to open file
     const std::string filepath = WrapPath(filename);
 
@@ -80,6 +75,11 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
         std::cerr << "File does not exist" << std::endl;
         return StatusCode::NOT_FOUND;
     }
+
+    // Initiate ClientWriter
+    dfs_service::FileTransferResponse response;
+    grpc::ClientContext context;
+    std::unique_ptr<ClientWriter<dfs_service::FileTransferChunk>> writer = service_stub->StoreFile(&context, &response);
 
     // Initiate file buffer and request message
     const size_t BufferSize = 64 * 1024; // 64 KB chunks
