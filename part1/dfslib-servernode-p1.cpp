@@ -88,7 +88,11 @@ public:
     // Add your additional code here, including
     // implementations of your protocol service methods
     //
-
+    Status StoreFile(grpc::ServerContext *context, const dfs_service::StoreFileRequest *request, dfs_service::StoreFileResponse *response) override {
+        std::cout << "Receiving request of file: " << std::endl;
+        std::cout << request->filename() << std::endl;
+        return grpc::Status(grpc::StatusCode::ALREADY_EXISTS, "hahahahaha");
+    };
 
 };
 

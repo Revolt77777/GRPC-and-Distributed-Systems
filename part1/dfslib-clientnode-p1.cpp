@@ -63,6 +63,26 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
     // StatusCode::NOT_FOUND - if the file cannot be found on the client
     // StatusCode::CANCELLED otherwise
     //
+
+    // Prepare the request
+    dfs_service::StoreFileRequest request;
+    request.set_filename(filename);
+
+    std::cout << "Sending Request of storing file: " << std::endl;
+    std::cout << filename << std::endl;
+
+    // Call gRPC
+    dfs_service::StoreFileResponse response;
+    grpc::ClientContext context;
+    grpc::Status status = service_stub->StoreFile(&context, request, &response);
+
+    // Parse the response
+    std::cout << "Got Response with status code: " << std::endl;
+    std::cout << status.error_code() << std::endl;
+    std::cout << "Error message: " << std::endl;
+    std::cout << status.error_message() << std::endl;
+
+    return status.error_code();
 }
 
 
