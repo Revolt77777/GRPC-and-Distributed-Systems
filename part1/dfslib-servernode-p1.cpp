@@ -88,12 +88,40 @@ public:
     // Add your additional code here, including
     // implementations of your protocol service methods
     //
-    Status StoreFile(grpc::ServerContext *context, const dfs_service::StoreFileRequest *request, dfs_service::StoreFileResponse *response) override {
-        std::cout << "Receiving request of file: " << std::endl;
-        std::cout << request->filename() << std::endl;
-        return grpc::Status(grpc::StatusCode::ALREADY_EXISTS, "hahahahaha");
-    };
+    Status StoreFile(::grpc::ServerContext* context, ::grpc::ServerReader< ::dfs_service::FileTransferChunk>* reader, ::dfs_service::FileTransferResponse* response) {
+        dfs_service::FileTransferChunk chunk;
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving file..." << std::endl;
+        // Read first chunk to get filename
+        if (!reader->Read(&chunk)) {
+            std::cerr << "Failed to read first file chunk" << std::endl;
+            return Status(StatusCode::CANCELLED, "No data in file");
+        }
+        std::string filepath = WrapPath(chunk.filename());
+        std::cout << "Storing file at: " << filepath << std::endl;
 
+        // Open or create the file and write the first chunk
+        std::fstream file(filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "Failed to open file" << std::endl;
+            return Status(StatusCode::CANCELLED, "Can't open file");
+        }
+        if (!file.write(chunk.data().data(), chunk.data().size())) {
+            std::cerr << "Failed to write file" << std::endl;
+            return Status(StatusCode::CANCELLED, "Can't write file");
+        }
+
+        // Repeatedly receive and write chunks if necessary
+        while (reader->Read(&chunk)) {
+            if (!file.write(chunk.data().data(), chunk.data().size())) {
+                std::cerr << "Failed to write file" << std::endl;
+                return Status(StatusCode::CANCELLED, "Can't write file");
+            }
+        }
+
+        std::cout << "Successfully stored file at: " << filepath << std::endl;
+        return Status::OK;
+    }
 };
 
 //

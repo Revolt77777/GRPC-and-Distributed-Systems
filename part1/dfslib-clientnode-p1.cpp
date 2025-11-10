@@ -64,23 +64,61 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
     // StatusCode::CANCELLED otherwise
     //
 
-    // Prepare the request
-    dfs_service::StoreFileRequest request;
-    request.set_filename(filename);
-
-    std::cout << "Sending Request of storing file: " << std::endl;
-    std::cout << filename << std::endl;
-
-    // Call gRPC
-    dfs_service::StoreFileResponse response;
+    // Initiate ClientWriter
+    dfs_service::FileTransferResponse response;
     grpc::ClientContext context;
-    grpc::Status status = service_stub->StoreFile(&context, request, &response);
+    std::unique_ptr<ClientWriter<dfs_service::FileTransferChunk>> writer = service_stub->StoreFile(&context, &response);
 
-    // Parse the response
-    std::cout << "Got Response with status code: " << std::endl;
-    std::cout << status.error_code() << std::endl;
-    std::cout << "Error message: " << std::endl;
-    std::cout << status.error_message() << std::endl;
+    // Try to open file
+    const std::string filepath = WrapPath(filename);
+
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of storing file: " << filepath << std::endl;
+
+    std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
+    if (!file) {
+        std::cerr << "File does not exist" << std::endl;
+        return StatusCode::NOT_FOUND;
+    }
+
+    // Initiate file buffer and request message
+    const size_t BufferSize = 64 * 1024; // 64 KB chunks
+    char buffer[BufferSize];
+
+    dfs_service::FileTransferChunk chunk;
+    chunk.set_filename(filename);
+
+    // Repeatedly read the file and copy into stream message
+    while (!file.eof()) {
+        file.read(buffer, BufferSize);
+        size_t bytesRead = file.gcount();
+        if (bytesRead == 0) {
+            std::cerr << "File read error" << std::endl;
+            return StatusCode::CANCELLED;
+        }
+
+        // Copy read file into chunk message
+        chunk.set_data(buffer, bytesRead);
+
+        // Send out current chunk
+        if (!writer->Write(chunk)) {
+            std::cerr << "Write error" << std::endl;
+            return StatusCode::CANCELLED;
+        }
+    }
+
+    // Finish the stream
+    writer->WritesDone();
+    Status status = writer->Finish();
+
+    // DEBUG: print out the response
+    if (!status.ok()) {
+        std::cout << "Complete storing file with error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+    }
+    else {
+        std::cout << "Successfully stored file." << std::endl;
+    }
 
     return status.error_code();
 }
