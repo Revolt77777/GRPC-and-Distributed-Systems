@@ -114,7 +114,7 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
     writer->WritesDone();
     Status status = writer->Finish();
 
-    // DEBUG: print out the response
+    // Check response
     if (!status.ok()) {
         std::cout << "Complete storing file with error status code: " << status.error_code() << std::endl;
         std::cout << "Error message: " << status.error_message() << std::endl;
@@ -123,7 +123,6 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
     std::cout << "Successfully stored file with file name: " << response.filename() << " and mtime: " << response.mtime() << std::endl;
     return StatusCode::OK;
 }
-
 
 StatusCode DFSClientNodeP1::Fetch(const std::string &filename) {
     //
@@ -188,9 +187,6 @@ StatusCode DFSClientNodeP1::Fetch(const std::string &filename) {
     std::remove(filepath.c_str());           // Delete old (if exists)
     std::rename(temp_filepath.c_str(), filepath.c_str());  // Rename temp
 
-    /*// Get response message
-    reader->Read(&chunk);
-    std::cout << "Successfully fetched file with file name: " << chunk.filename() << " and mtime: " << chunk.mtime() << std::endl;*/
     std::cout << "Successfully fetched file." << std::endl;
     return StatusCode::OK;
 }
@@ -209,6 +205,30 @@ StatusCode DFSClientNodeP1::Delete(const std::string &filename) {
     // StatusCode::NOT_FOUND - if the file cannot be found on the server
     // StatusCode::CANCELLED otherwise
     //
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of deleting file: " << filename << std::endl;
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
+    dfs_service::DeleteRequest request;
+    request.set_filename(filename);
+
+    dfs_service::DeleteResponse response;
+
+    // Send out gRPC request
+    Status status = service_stub->DeleteFile(&context, request, &response);
+
+    // Check response
+    if (!status.ok()) {
+        std::cout << "Complete deleting file with error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+    std::cout << "Successfully deleted file with file name: " << response.filename() << std::endl;
+    return StatusCode::OK;
+
 }
 
 StatusCode DFSClientNodeP1::List(std::map<std::string, int> *file_map, bool display) {

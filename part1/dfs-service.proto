@@ -5,7 +5,7 @@ package dfs_service;
 service DFSService {
     rpc StoreFile (stream StoreChunk) returns (StoreResponse);
     rpc FetchFile (FetchRequest) returns (stream FetchChunk);
-    // 3. REQUIRED (Parts 1 & 2): A method to delete files from the server
+    rpc DeleteFile (DeleteRequest) returns (DeleteResponse);
 
     // 4. REQUIRED (Parts 1 & 2): A method to list all files on the server
 
@@ -35,4 +35,14 @@ message FetchChunk {
     string filename = 1;
     int64 mtime = 2;
     bytes data = 3;
+}
+
+// Request for delete operation
+message DeleteRequest {
+    string filename = 1;
+}
+
+// Response for delete operation
+message DeleteResponse {
+    string filename = 1;
 }

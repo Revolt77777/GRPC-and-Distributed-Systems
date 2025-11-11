@@ -91,11 +91,11 @@ public:
     Status StoreFile(::grpc::ServerContext* context, ::grpc::ServerReader< ::dfs_service::StoreChunk>* reader, ::dfs_service::StoreResponse* response) override {
         dfs_service::StoreChunk chunk;
         std::cout << "-----------------------------------------------------------" << std::endl;
-        std::cout << "Receiving file..." << std::endl;
+        std::cout << "Receiving request to store file." << std::endl;
         // Read first chunk to get filename
         if (!reader->Read(&chunk)) {
             std::cerr << "Failed to read first file chunk" << std::endl;
-            return Status(StatusCode::CANCELLED, "No data in file");
+            return Status(StatusCode::CANCELLED, "Failed to read first file chunk");
         }
         const std::string filename = chunk.filename();
         const std::string filepath = WrapPath(filename);
@@ -177,6 +177,32 @@ public:
         std::cout << "Successfully fetched file." << std::endl;
         return Status::OK;
     };
+
+    Status DeleteFile(::grpc::ServerContext* context, const ::dfs_service::DeleteRequest* request, ::dfs_service::DeleteResponse* response) override {
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to delete file: " << request->filename() << std::endl;
+
+        // Check if file exists
+        const std::string filename = request->filename();
+        const std::string filepath = WrapPath(filename);
+        struct stat buffer;
+        if (stat(filepath.c_str(), &buffer) != 0) {
+            std::cerr << "File does not exist." << std::endl;
+            return Status(StatusCode::NOT_FOUND, "File does not exist.");
+        }
+
+        // Delete the file
+        std::cout << "Deleting file at: " << filepath << std::endl;
+        if (std::remove(filepath.c_str()) != 0) {
+            std::cerr << "Deletion failed." << std::endl;
+            return Status(StatusCode::CANCELLED, "Deletion failed.");
+        }
+
+        // Return OK response
+        std::cout << "Successfully deleted file." << std::endl;
+        response->set_filename(filename);
+        return Status::OK;
+    }
 };
 
 //
