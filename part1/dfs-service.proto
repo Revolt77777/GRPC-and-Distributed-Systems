@@ -3,8 +3,8 @@ syntax = "proto3";
 package dfs_service;
 
 service DFSService {
-    rpc StoreFile (stream FileTransferChunk) returns (FileTransferResponse);
-    rpc FetchFile (FetchFileRequest) returns (stream FileTransferChunk);
+    rpc StoreFile (stream StoreChunk) returns (StoreResponse);
+    rpc FetchFile (FetchRequest) returns (stream FetchChunk);
     // 3. REQUIRED (Parts 1 & 2): A method to delete files from the server
 
     // 4. REQUIRED (Parts 1 & 2): A method to list all files on the server
@@ -14,16 +14,25 @@ service DFSService {
     // 6. Any other methods you deem necessary to complete the tasks of this assignment
 
 }
-// Stream Request for store/fetch a chunk of file
-message FileTransferChunk {
+// Data Chunk for store operation
+message StoreChunk {
     string filename = 1;
     bytes data = 2;
 }
 // Response for store operation
-message FileTransferResponse {
+message StoreResponse {
+    string filename = 1;
+    int64 mtime = 2;
 }
 
 // Request for fetch operation
-message FetchFileRequest {
+message FetchRequest {
     string filename = 1;
+}
+
+// Data Chunk for fetch operation
+message FetchChunk {
+    string filename = 1;
+    int64 mtime = 2;
+    bytes data = 3;
 }

@@ -88,8 +88,8 @@ public:
     // Add your additional code here, including
     // implementations of your protocol service methods
     //
-    Status StoreFile(::grpc::ServerContext* context, ::grpc::ServerReader< ::dfs_service::FileTransferChunk>* reader, ::dfs_service::FileTransferResponse* response) override {
-        dfs_service::FileTransferChunk chunk;
+    Status StoreFile(::grpc::ServerContext* context, ::grpc::ServerReader< ::dfs_service::StoreChunk>* reader, ::dfs_service::StoreResponse* response) override {
+        dfs_service::StoreChunk chunk;
         std::cout << "-----------------------------------------------------------" << std::endl;
         std::cout << "Receiving file..." << std::endl;
         // Read first chunk to get filename
@@ -97,20 +97,18 @@ public:
             std::cerr << "Failed to read first file chunk" << std::endl;
             return Status(StatusCode::CANCELLED, "No data in file");
         }
-        const std::string filepath = WrapPath(chunk.filename());
-        const std::string temp_filepath = filepath + ".tmp";
+        const std::string filename = chunk.filename();
+        const std::string filepath = WrapPath(filename);
         std::cout << "Storing file at: " << filepath << std::endl;
 
         // Open or create the file and write the first chunk
-        std::fstream file(temp_filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+        std::fstream file(filepath, std::ios::out | std::ios::trunc | std::ios::binary);
         if (!file.is_open()) {
             std::cerr << "Failed to open file" << std::endl;
             return Status(StatusCode::CANCELLED, "Can't open file");
         }
         if (!file.write(chunk.data().data(), chunk.data().size())) {
             std::cerr << "Failed to write file" << std::endl;
-            file.close();
-            std::remove(temp_filepath.c_str());
             return Status(StatusCode::CANCELLED, "Can't write file");
         }
 
@@ -118,24 +116,26 @@ public:
         while (reader->Read(&chunk)) {
             if (!file.write(chunk.data().data(), chunk.data().size())) {
                 std::cerr << "Failed to write file" << std::endl;
-                file.close();
-                std::remove(temp_filepath.c_str());
                 return Status(StatusCode::CANCELLED, "Can't write file");
             }
         }
-        file.close();
-        std::remove(filepath.c_str());
-        std::rename(temp_filepath.c_str(), filepath.c_str());
+
+        response->set_filename(filename);
+        struct stat filestat;
+        if (stat(filepath.c_str(), &filestat) == 0) {
+            response->set_mtime(filestat.st_mtime);
+        }
         std::cout << "Successfully stored file at: " << filepath << std::endl;
         return Status::OK;
     }
 
-    Status FetchFile(::grpc::ServerContext* context, const ::dfs_service::FetchFileRequest* request, ::grpc::ServerWriter< ::dfs_service::FileTransferChunk>* writer) override {
+    Status FetchFile(::grpc::ServerContext* context, const ::dfs_service::FetchRequest* request, ::grpc::ServerWriter< ::dfs_service::FetchChunk>* writer) override {
         std::cout << "-----------------------------------------------------------" << std::endl;
         std::cout << "Receiving request to fetch file: " << request->filename() << std::endl;
 
         // Try to open file
-        const std::string filepath = WrapPath(request->filename());
+        const std::string filename = request->filename();
+        const std::string filepath = WrapPath(filename);
         std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
         if (!file) {
             std::cerr << "File does not exist." << std::endl;
@@ -146,7 +146,7 @@ public:
         const size_t BufferSize = dfs_shared::CHUNK_SIZE; // 64 KB chunks
         char buffer[BufferSize];
 
-        dfs_service::FileTransferChunk chunk;
+        dfs_service::FetchChunk chunk;
 
         // Repeatedly read the file and copy into stream message
         while (!file.eof()) {
@@ -167,6 +167,13 @@ public:
             }
         }
 
+        /*
+        chunk.set_filename(filename);
+        struct stat filestat;
+        if (stat(filepath.c_str(), &filestat) == 0) {
+            chunk.set_mtime(filestat.st_mtime);
+        }
+        writer->Write(chunk);*/
         std::cout << "Successfully fetched file." << std::endl;
         return Status::OK;
     };

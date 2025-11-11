@@ -78,16 +78,18 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
     }
 
     // Initiate ClientWriter
-    dfs_service::FileTransferResponse response;
+    dfs_service::StoreResponse response;
     grpc::ClientContext context;
-    std::unique_ptr<ClientWriter<dfs_service::FileTransferChunk> > writer = service_stub->
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
+    std::unique_ptr<ClientWriter<dfs_service::StoreChunk> > writer = service_stub->
             StoreFile(&context, &response);
 
     // Initiate file buffer and request message
     const size_t BufferSize = dfs_shared::CHUNK_SIZE; // 64 KB chunks
     char buffer[BufferSize];
 
-    dfs_service::FileTransferChunk chunk;
+    dfs_service::StoreChunk chunk;
     chunk.set_filename(filename);
 
     // Repeatedly read the file and copy into stream message
@@ -95,8 +97,7 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
         file.read(buffer, BufferSize);
         size_t bytesRead = file.gcount();
         if (bytesRead == 0) {
-            std::cerr << "File read error." << std::endl;
-            return StatusCode::CANCELLED;
+            break;
         }
 
         // Copy read file into chunk message
@@ -105,7 +106,7 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
         // Send out current chunk
         if (!writer->Write(chunk)) {
             std::cerr << "Write error." << std::endl;
-            return StatusCode::CANCELLED;
+            break;
         }
     }
 
@@ -119,7 +120,7 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
         std::cout << "Error message: " << status.error_message() << std::endl;
         return status.error_code();
     }
-    std::cout << "Successfully stored file." << std::endl;
+    std::cout << "Successfully stored file with file name: " << response.filename() << " and mtime: " << response.mtime() << std::endl;
     return StatusCode::OK;
 }
 
@@ -150,9 +151,10 @@ StatusCode DFSClientNodeP1::Fetch(const std::string &filename) {
 
     // Initialize grpc objects and requests
     grpc::ClientContext context;
-    dfs_service::FetchFileRequest request;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    dfs_service::FetchRequest request;
     request.set_filename(filename);
-    std::unique_ptr<ClientReader<dfs_service::FileTransferChunk> > reader = service_stub->FetchFile(&context, request);
+    std::unique_ptr<ClientReader<dfs_service::FetchChunk> > reader = service_stub->FetchFile(&context, request);
 
     // Initialize data transfer chunk buffer and ofstream
     const std::string filepath = WrapPath(filename);
@@ -164,7 +166,7 @@ StatusCode DFSClientNodeP1::Fetch(const std::string &filename) {
     }
     std::cout << "Storing file at: " << filepath << std::endl;
 
-    dfs_service::FileTransferChunk chunk;
+    dfs_service::FetchChunk chunk;
 
     // Try and start to receive file
     while (reader->Read(&chunk)) {
@@ -185,6 +187,10 @@ StatusCode DFSClientNodeP1::Fetch(const std::string &filename) {
     }
     std::remove(filepath.c_str());           // Delete old (if exists)
     std::rename(temp_filepath.c_str(), filepath.c_str());  // Rename temp
+
+    /*// Get response message
+    reader->Read(&chunk);
+    std::cout << "Successfully fetched file with file name: " << chunk.filename() << " and mtime: " << chunk.mtime() << std::endl;*/
     std::cout << "Successfully fetched file." << std::endl;
     return StatusCode::OK;
 }
