@@ -219,6 +219,45 @@ public:
         std::cout << "Successfully retrieved file status." << std::endl;
         return Status::OK;
     }
+
+    Status ListFiles(::grpc::ServerContext* context, const ::dfs_service::ListFilesRequest* request, ::dfs_service::FilesList* files_list) override {
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to list all files on server." << std::endl;
+
+        // Invoke dirent.h to list all files on mount_path
+        DIR* dir = opendir(mount_path.c_str());
+        if (!dir) {
+            std::cerr << "Directory does not exist." << std::endl;
+            return Status(StatusCode::CANCELLED, "Directory does not exist.");
+        }
+
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            std::string filename = entry->d_name;
+
+            // Skip . and ..
+            if (filename == "." || filename == "..") continue;
+
+            // Get full path
+            std::string filepath = WrapPath(filename);
+
+            // Get file stats
+            struct stat file_stat;
+            if (stat(filepath.c_str(), &file_stat) == 0) {
+                // Skip directories, only include files
+                if (S_ISREG(file_stat.st_mode)) {
+                    // Add to files list
+                    dfs_service::FileStatus *file = files_list->add_file();
+                    file->set_filename(filename);
+                    file->set_mtime(file_stat.st_mtime);
+                }
+            }
+        }
+        closedir(dir);
+
+        std::cout << "Successfully retrieved list files." << std::endl;
+        return Status::OK;
+    }
 };
 
 //

@@ -6,9 +6,7 @@ service DFSService {
     rpc StoreFile (stream StoreChunk) returns (StoreResponse);
     rpc FetchFile (FetchRequest) returns (stream FetchChunk);
     rpc DeleteFile (DeleteRequest) returns (DeleteResponse);
-
-    // 4. REQUIRED (Parts 1 & 2): A method to list all files on the server
-
+    rpc ListFiles (ListFilesRequest) returns (FilesList);
     rpc GetFileStatus (GetFileStatusRequest) returns (FileStatus);
 }
 // Data Chunk for store operation
@@ -52,4 +50,13 @@ message FileStatus{
     string filename = 1;
     int64 filesize = 2;
     int64 mtime = 3;
+}
+
+// Request for list all files
+message ListFilesRequest {
+}
+
+// Response for list all files - files list
+message FilesList {
+    repeated FileStatus file = 1;
 }

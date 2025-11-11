@@ -222,7 +222,7 @@ StatusCode DFSClientNodeP1::Delete(const std::string &filename) {
 
     // Check response
     if (!status.ok()) {
-        std::cout << "Complete deleting file with error status code: " << status.error_code() << std::endl;
+        std::cout << "Complete deleting file, error status code: " << status.error_code() << std::endl;
         std::cout << "Error message: " << status.error_message() << std::endl;
         return status.error_code();
     }
@@ -251,6 +251,50 @@ StatusCode DFSClientNodeP1::List(std::map<std::string, int> *file_map, bool disp
     // StatusCode::CANCELLED otherwise
     //
     //
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of list all files on server." << std::endl;
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
+    dfs_service::ListFilesRequest request;
+
+    dfs_service::FilesList files_list;
+
+    // Send out gRPC request
+    Status status = service_stub->ListFiles(&context, request, &files_list);
+
+    // Check response
+    if (!status.ok()) {
+        std::cout << "Unable to list files, error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+
+    std::cout << "Successfully retrieved files on file server: " << std::endl;
+    std::cout << "-----" << std::endl;
+    // Append filename-mtime pairs into file_map
+    if (file_map != nullptr) {
+        for (const auto& file : files_list.file()) {
+            (*file_map)[file.filename()] = file.mtime();
+        }
+    }
+
+    // Print out if display indicator is on
+    if (display) {
+        int count = 0;
+        for (const auto& file : files_list.file()) {
+            std::cout << "File " << count ++ << ": " << std::endl;
+            std::cout << "  File name: " << file.filename() << std::endl;
+            std::cout << "  File last modified time: " << file.mtime() << std::endl;
+        }
+        if (count == 0) {
+            std::cout << "No files exist on server." << std::endl;
+        }
+    }
+
+    return StatusCode::OK;
 }
 
 StatusCode DFSClientNodeP1::Stat(const std::string &filename, void *file_status) {
@@ -276,7 +320,6 @@ StatusCode DFSClientNodeP1::Stat(const std::string &filename, void *file_status)
     // StatusCode::CANCELLED otherwise
     //
     //
-
     std::cout << "-----------------------------------------------------------" << std::endl;
     std::cout << "Sending Request of getting status of file: " << filename << std::endl;
 
@@ -302,7 +345,7 @@ StatusCode DFSClientNodeP1::Stat(const std::string &filename, void *file_status)
 
     // Check response
     if (!status.ok()) {
-        std::cout << "Unable to get file status with error status code: " << status.error_code() << std::endl;
+        std::cout << "Unable to get file status, error status code: " << status.error_code() << std::endl;
         std::cout << "Error message: " << status.error_message() << std::endl;
         return status.error_code();
     }
