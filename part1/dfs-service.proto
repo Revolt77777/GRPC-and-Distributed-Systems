@@ -23,11 +23,7 @@ message FileTransferChunk {
 message FileTransferResponse {
 }
 
-// Request for fetching a file
+// Request for fetch operation
 message FetchFileRequest {
     string filename = 1;
-}
-
-// Response for fetch operation - small file
-message FetchFileResponse {
 }

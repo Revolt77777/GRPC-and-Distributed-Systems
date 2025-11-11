@@ -40,12 +40,13 @@ using grpc::ClientContext;
 //
 
 
-DFSClientNodeP1::DFSClientNodeP1() : DFSClientNode() {}
+DFSClientNodeP1::DFSClientNodeP1() : DFSClientNode() {
+}
 
-DFSClientNodeP1::~DFSClientNodeP1() noexcept {}
+DFSClientNodeP1::~DFSClientNodeP1() noexcept {
+}
 
 StatusCode DFSClientNodeP1::Store(const std::string &filename) {
-
     //
     // STUDENT INSTRUCTION:
     //
@@ -72,17 +73,18 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
 
     std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
     if (!file) {
-        std::cerr << "File does not exist" << std::endl;
+        std::cerr << "File does not exist." << std::endl;
         return StatusCode::NOT_FOUND;
     }
 
     // Initiate ClientWriter
     dfs_service::FileTransferResponse response;
     grpc::ClientContext context;
-    std::unique_ptr<ClientWriter<dfs_service::FileTransferChunk>> writer = service_stub->StoreFile(&context, &response);
+    std::unique_ptr<ClientWriter<dfs_service::FileTransferChunk> > writer = service_stub->
+            StoreFile(&context, &response);
 
     // Initiate file buffer and request message
-    const size_t BufferSize = 64 * 1024; // 64 KB chunks
+    const size_t BufferSize = dfs_shared::CHUNK_SIZE; // 64 KB chunks
     char buffer[BufferSize];
 
     dfs_service::FileTransferChunk chunk;
@@ -93,7 +95,7 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
         file.read(buffer, BufferSize);
         size_t bytesRead = file.gcount();
         if (bytesRead == 0) {
-            std::cerr << "File read error" << std::endl;
+            std::cerr << "File read error." << std::endl;
             return StatusCode::CANCELLED;
         }
 
@@ -102,7 +104,7 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
 
         // Send out current chunk
         if (!writer->Write(chunk)) {
-            std::cerr << "Write error" << std::endl;
+            std::cerr << "Write error." << std::endl;
             return StatusCode::CANCELLED;
         }
     }
@@ -115,17 +117,14 @@ StatusCode DFSClientNodeP1::Store(const std::string &filename) {
     if (!status.ok()) {
         std::cout << "Complete storing file with error status code: " << status.error_code() << std::endl;
         std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
     }
-    else {
-        std::cout << "Successfully stored file." << std::endl;
-    }
-
-    return status.error_code();
+    std::cout << "Successfully stored file." << std::endl;
+    return StatusCode::OK;
 }
 
 
 StatusCode DFSClientNodeP1::Fetch(const std::string &filename) {
-
     //
     // STUDENT INSTRUCTION:
     //
@@ -145,10 +144,52 @@ StatusCode DFSClientNodeP1::Fetch(const std::string &filename) {
     // StatusCode::CANCELLED otherwise
     //
     //
+
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of fetching file: " << filename << std::endl;
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    dfs_service::FetchFileRequest request;
+    request.set_filename(filename);
+    std::unique_ptr<ClientReader<dfs_service::FileTransferChunk> > reader = service_stub->FetchFile(&context, request);
+
+    // Initialize data transfer chunk buffer and ofstream
+    const std::string filepath = WrapPath(filename);
+    const std::string temp_filepath = filepath + ".tmp";
+    std::fstream file(temp_filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file." << std::endl;
+        return StatusCode::CANCELLED;
+    }
+    std::cout << "Storing file at: " << filepath << std::endl;
+
+    dfs_service::FileTransferChunk chunk;
+
+    // Try and start to receive file
+    while (reader->Read(&chunk)) {
+        if (!file.write(chunk.data().data(), chunk.data().size())) {
+            std::cerr << "Failed to write file." << std::endl;
+            return StatusCode::CANCELLED;
+        }
+    }
+    Status status = reader->Finish();
+    file.close();
+
+    // Cleanup if error occurred
+    if (!status.ok()) {
+        std::remove(temp_filepath.c_str());
+        std::cout << "Complete fetching file with error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+    std::remove(filepath.c_str());           // Delete old (if exists)
+    std::rename(temp_filepath.c_str(), filepath.c_str());  // Rename temp
+    std::cout << "Successfully fetched file." << std::endl;
+    return StatusCode::OK;
 }
 
-StatusCode DFSClientNodeP1::Delete(const std::string& filename) {
-
+StatusCode DFSClientNodeP1::Delete(const std::string &filename) {
     //
     // STUDENT INSTRUCTION:
     //
@@ -162,11 +203,9 @@ StatusCode DFSClientNodeP1::Delete(const std::string& filename) {
     // StatusCode::NOT_FOUND - if the file cannot be found on the server
     // StatusCode::CANCELLED otherwise
     //
-
 }
 
-StatusCode DFSClientNodeP1::List(std::map<std::string,int>* file_map, bool display) {
-
+StatusCode DFSClientNodeP1::List(std::map<std::string, int> *file_map, bool display) {
     //
     // STUDENT INSTRUCTION:
     //
@@ -188,8 +227,7 @@ StatusCode DFSClientNodeP1::List(std::map<std::string,int>* file_map, bool displ
     //
 }
 
-StatusCode DFSClientNodeP1::Stat(const std::string &filename, void* file_status) {
-
+StatusCode DFSClientNodeP1::Stat(const std::string &filename, void *file_status) {
     //
     // STUDENT INSTRUCTION:
     //
@@ -220,5 +258,3 @@ StatusCode DFSClientNodeP1::Stat(const std::string &filename, void* file_status)
 // Add your additional code here, including
 // implementations of your client methods
 //
-
-

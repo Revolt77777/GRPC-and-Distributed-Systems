@@ -88,7 +88,7 @@ public:
     // Add your additional code here, including
     // implementations of your protocol service methods
     //
-    Status StoreFile(::grpc::ServerContext* context, ::grpc::ServerReader< ::dfs_service::FileTransferChunk>* reader, ::dfs_service::FileTransferResponse* response) {
+    Status StoreFile(::grpc::ServerContext* context, ::grpc::ServerReader< ::dfs_service::FileTransferChunk>* reader, ::dfs_service::FileTransferResponse* response) override {
         dfs_service::FileTransferChunk chunk;
         std::cout << "-----------------------------------------------------------" << std::endl;
         std::cout << "Receiving file..." << std::endl;
@@ -97,17 +97,20 @@ public:
             std::cerr << "Failed to read first file chunk" << std::endl;
             return Status(StatusCode::CANCELLED, "No data in file");
         }
-        std::string filepath = WrapPath(chunk.filename());
+        const std::string filepath = WrapPath(chunk.filename());
+        const std::string temp_filepath = filepath + ".tmp";
         std::cout << "Storing file at: " << filepath << std::endl;
 
         // Open or create the file and write the first chunk
-        std::fstream file(filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+        std::fstream file(temp_filepath, std::ios::out | std::ios::trunc | std::ios::binary);
         if (!file.is_open()) {
             std::cerr << "Failed to open file" << std::endl;
             return Status(StatusCode::CANCELLED, "Can't open file");
         }
         if (!file.write(chunk.data().data(), chunk.data().size())) {
             std::cerr << "Failed to write file" << std::endl;
+            file.close();
+            std::remove(temp_filepath.c_str());
             return Status(StatusCode::CANCELLED, "Can't write file");
         }
 
@@ -115,13 +118,58 @@ public:
         while (reader->Read(&chunk)) {
             if (!file.write(chunk.data().data(), chunk.data().size())) {
                 std::cerr << "Failed to write file" << std::endl;
+                file.close();
+                std::remove(temp_filepath.c_str());
                 return Status(StatusCode::CANCELLED, "Can't write file");
             }
         }
-
+        file.close();
+        std::remove(filepath.c_str());
+        std::rename(temp_filepath.c_str(), filepath.c_str());
         std::cout << "Successfully stored file at: " << filepath << std::endl;
         return Status::OK;
     }
+
+    Status FetchFile(::grpc::ServerContext* context, const ::dfs_service::FetchFileRequest* request, ::grpc::ServerWriter< ::dfs_service::FileTransferChunk>* writer) override {
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to fetch file: " << request->filename() << std::endl;
+
+        // Try to open file
+        const std::string filepath = WrapPath(request->filename());
+        std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
+        if (!file) {
+            std::cerr << "File does not exist." << std::endl;
+            return Status(StatusCode::NOT_FOUND, "File does not exist.");
+        }
+
+        // Initiate file buffer and chunk message
+        const size_t BufferSize = dfs_shared::CHUNK_SIZE; // 64 KB chunks
+        char buffer[BufferSize];
+
+        dfs_service::FileTransferChunk chunk;
+
+        // Repeatedly read the file and copy into stream message
+        while (!file.eof()) {
+            file.read(buffer, BufferSize);
+            size_t bytesRead = file.gcount();
+            if (bytesRead == 0) {
+                std::cerr << "File read error." << std::endl;
+                return Status(StatusCode::CANCELLED, "File read error.");
+            }
+
+            // Copy read file into chunk message
+            chunk.set_data(buffer, bytesRead);
+
+            // Send out current chunk
+            if (!writer->Write(chunk)) {
+                std::cerr << "Write error." << std::endl;
+                return Status(StatusCode::CANCELLED, "Write error.");
+            }
+        }
+
+        std::cout << "Successfully fetched file." << std::endl;
+        return Status::OK;
+    };
 };
 
 //

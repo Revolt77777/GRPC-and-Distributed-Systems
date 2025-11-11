@@ -19,6 +19,9 @@
 //
 // Add your additional code here
 //
+namespace dfs_shared {
+    constexpr size_t CHUNK_SIZE = 65536;
+}
 
 
 #endif
