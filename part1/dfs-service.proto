@@ -9,10 +9,7 @@ service DFSService {
 
     // 4. REQUIRED (Parts 1 & 2): A method to list all files on the server
 
-    // 5. REQUIRED (Parts 1 & 2): A method to get the status of a file on the server
-
-    // 6. Any other methods you deem necessary to complete the tasks of this assignment
-
+    rpc GetFileStatus (GetFileStatusRequest) returns (FileStatus);
 }
 // Data Chunk for store operation
 message StoreChunk {
@@ -32,9 +29,7 @@ message FetchRequest {
 
 // Data Chunk for fetch operation
 message FetchChunk {
-    string filename = 1;
-    int64 mtime = 2;
-    bytes data = 3;
+    bytes data = 1;
 }
 
 // Request for delete operation
@@ -45,4 +40,16 @@ message DeleteRequest {
 // Response for delete operation
 message DeleteResponse {
     string filename = 1;
+}
+
+// Request for get status operation
+message GetFileStatusRequest {
+    string filename = 1;
+}
+
+// Status for single file
+message FileStatus{
+    string filename = 1;
+    int64 filesize = 2;
+    int64 mtime = 3;
 }

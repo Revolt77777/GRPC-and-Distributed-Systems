@@ -167,16 +167,9 @@ public:
             }
         }
 
-        /*
-        chunk.set_filename(filename);
-        struct stat filestat;
-        if (stat(filepath.c_str(), &filestat) == 0) {
-            chunk.set_mtime(filestat.st_mtime);
-        }
-        writer->Write(chunk);*/
         std::cout << "Successfully fetched file." << std::endl;
         return Status::OK;
-    };
+    }
 
     Status DeleteFile(::grpc::ServerContext* context, const ::dfs_service::DeleteRequest* request, ::dfs_service::DeleteResponse* response) override {
         std::cout << "-----------------------------------------------------------" << std::endl;
@@ -201,6 +194,29 @@ public:
         // Return OK response
         std::cout << "Successfully deleted file." << std::endl;
         response->set_filename(filename);
+        return Status::OK;
+    }
+
+    Status GetFileStatus(::grpc::ServerContext* context, const ::dfs_service::GetFileStatusRequest* request, ::dfs_service::FileStatus* response) override {
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to get status of file: " << request->filename() << std::endl;
+
+        // Check if file exists
+        const std::string filename = request->filename();
+        const std::string filepath = WrapPath(filename);
+        struct stat f_stat;
+        if (stat(filepath.c_str(), &f_stat) != 0) {
+            std::cerr << "File does not exist." << std::endl;
+            return Status(StatusCode::NOT_FOUND, "File does not exist.");
+        }
+
+        // Acquire stats
+        response->set_filename(filename);
+        response->set_filesize(f_stat.st_size);
+        response->set_mtime(f_stat.st_mtime);
+
+        // Return OK response
+        std::cout << "Successfully retrieved file status." << std::endl;
         return Status::OK;
     }
 };

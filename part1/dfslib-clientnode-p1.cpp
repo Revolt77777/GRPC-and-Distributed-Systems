@@ -276,6 +276,42 @@ StatusCode DFSClientNodeP1::Stat(const std::string &filename, void *file_status)
     // StatusCode::CANCELLED otherwise
     //
     //
+
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of getting status of file: " << filename << std::endl;
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
+    dfs_service::GetFileStatusRequest request;
+    request.set_filename(filename);
+
+    // Declare pointer and local storage in case *file_status is not explicitly entered
+    dfs_service::FileStatus local_response;
+    dfs_service::FileStatus* response;
+
+    if (file_status == nullptr) {
+        response = &local_response;
+    } else {
+        response = static_cast<dfs_service::FileStatus*>(file_status);
+    }
+
+    // Send out gRPC request
+    Status status = service_stub->GetFileStatus(&context, request, response);
+
+    // Check response
+    if (!status.ok()) {
+        std::cout << "Unable to get file status with error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+    std::cout << "Successfully retrieved file status: " << std::endl;
+    std::cout << "  File name: " << response->filename() << std::endl;
+    std::cout << "  File size: " << response->filesize() << std::endl;;
+    std::cout << "  File last modified time: " << response->mtime() << std::endl;
+
+    return StatusCode::OK;
 }
 
 //
