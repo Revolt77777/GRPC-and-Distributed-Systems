@@ -37,8 +37,8 @@ using dfs_service::DFSService;
 // message types you are using in your `dfs-service.proto` file
 // to indicate a file request and a listing of files from the server
 //
-using FileRequestType = FileRequest;
-using FileListResponseType = FileList;
+using FileRequestType = dfs_service::FileRequest;
+using FileListResponseType = dfs_service::FileList;
 
 extern dfs_log_level_e DFS_LOG_LEVEL;
 
@@ -97,6 +97,12 @@ private:
 
     /** CRC Table kept in memory for faster calculations **/
     CRC::Table<std::uint32_t, 32> crc_table;
+
+    /** Mutex for write locks **/
+    std::mutex lock_mutex;
+
+    /** Write lock table: filename -> client_id **/
+    std::map<std::string, std::string> file_locks;
 
 public:
 
@@ -216,7 +222,83 @@ public:
     // Add your additional code here, including
     // the implementations of your rpc protocol methods.
     //
+    Status RequestWriteLock(::grpc::ServerContext* context, const ::dfs_service::WriteLockRequest* request, ::dfs_service::WriteLockResponse* response) override {
+        std::string filename = request->filename();
+        std::string client_id = request->client_id();
 
+        std::cout << "Receiving request to acquire write lock for file: " << filename << std::endl;
+
+        std::lock_guard<std::mutex> lock(lock_mutex);
+
+        if (file_locks.count(filename) && file_locks[filename] != client_id) {
+            // Locked by different client
+            return Status(StatusCode::RESOURCE_EXHAUSTED, "Lock held by another client");
+        }
+
+        file_locks[filename] = client_id;  // Grant lock
+        std::cout << "Successfully acquired write lock for: " << filename << std::endl;
+        return Status::OK;
+    }
+
+    Status StoreFile(::grpc::ServerContext* context, ::grpc::ServerReader< ::dfs_service::StoreChunk>* reader, ::dfs_service::StoreResponse* response) override{
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to store file." << std::endl;
+
+        dfs_service::StoreChunk chunk;
+        // Read first chunk to validate file status
+        if (!reader->Read(&chunk)) {
+            std::cerr << "Failed to read first file chunk" << std::endl;
+            return Status(StatusCode::CANCELLED, "Failed to read first file chunk");
+        }
+        const std::string filename = chunk.filename();
+        const std::string filepath = WrapPath(filename);
+
+        // RAII lock auto_releaser
+        auto lock_releaser = std::unique_ptr<std::string, std::function<void(std::string*)>>(
+            new std::string(filename),
+            [this](std::string* fname) {
+                std::lock_guard<std::mutex> lock(this->lock_mutex);
+                this->file_locks.erase(*fname);
+                delete fname;
+            }
+        );
+
+        struct stat file_stat;
+        if (lstat(filepath.c_str(), &file_stat) == 0) {
+            // File exists
+            if (dfs_file_checksum(filepath, &crc_table) == chunk.crc()) {
+                // Files are identical in content
+                return Status(StatusCode::ALREADY_EXISTS, "Exact same file exists on server.");
+            }
+            if (file_stat.st_mtime >= chunk.mtime()) {
+                // Newer file exists on server
+                return Status(StatusCode::ALREADY_EXISTS, "Newer file exists on server.");
+            }
+        }
+
+        std::cout << "Storing file at: " << filepath << std::endl;
+        std::fstream file(filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "Failed to open file" << std::endl;
+            return Status(StatusCode::CANCELLED, "Can't open file");
+        }
+
+        if (!file.write(chunk.data().data(), chunk.data().size())) {
+            std::cerr << "Failed to write file" << std::endl;
+            return Status(StatusCode::CANCELLED, "Can't write file");
+        }
+
+        // Repeatedly receive and write chunks if necessary
+        while (reader->Read(&chunk)) {
+            if (!file.write(chunk.data().data(), chunk.data().size())) {
+                std::cerr << "Failed to write file" << std::endl;
+                return Status(StatusCode::CANCELLED, "Can't write file");
+            }
+        }
+
+        std::cout << "Successfully stored file at: " << filepath << std::endl;
+        return Status::OK;
+    }
 
 };
 

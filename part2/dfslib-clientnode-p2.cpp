@@ -40,8 +40,8 @@ extern dfs_log_level_e DFS_LOG_LEVEL;
 // message types you are using to indicate
 // a file request and a listing of files from the server.
 //
-using FileRequestType = FileRequest;
-using FileListResponseType = FileList;
+using FileRequestType = dfs_service::FileRequest;
+using FileListResponseType = dfs_service::FileList;
 
 DFSClientNodeP2::DFSClientNodeP2() : DFSClientNode() {}
 DFSClientNodeP2::~DFSClientNodeP2() {}
@@ -65,6 +65,26 @@ grpc::StatusCode DFSClientNodeP2::RequestWriteAccess(const std::string &filename
     // StatusCode::CANCELLED otherwise
     //
     //
+    std::cout << "Sending Request of write access on file: " << filename << std::endl;
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    dfs_service::WriteLockRequest request;
+    dfs_service::WriteLockResponse response;
+    request.set_filename(filename);
+    request.set_client_id(client_id);
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    // Send out gRPC request
+    Status status = service_stub->RequestWriteLock(&context, request, &response);
+
+    // Check response
+    if (!status.ok()) {
+        std::cout << "Failed to acquire write lock, error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+    std::cout << "Successfully acquired write lock on file name: " << filename << std::endl;
+    return StatusCode::OK;
 
 }
 
@@ -94,7 +114,74 @@ grpc::StatusCode DFSClientNodeP2::Store(const std::string &filename) {
     // StatusCode::CANCELLED otherwise
     //
     //
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of storing file: " << filename << std::endl;
 
+    // Try to open file
+    const std::string filepath = WrapPath(filename);
+    std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
+    if (!file) {
+        std::cerr << "File does not exist." << std::endl;
+        return StatusCode::NOT_FOUND;
+    }
+
+    // Try to acquire write lock of target file
+    StatusCode writeLockStatus = RequestWriteAccess(filename);
+    if (writeLockStatus != StatusCode::OK) {
+        return writeLockStatus;
+    }
+
+    // Initiate ClientWriter
+    dfs_service::StoreResponse response;
+    grpc::ClientContext context;
+
+    std::unique_ptr<ClientWriter<dfs_service::StoreChunk> > writer = service_stub->
+            StoreFile(&context, &response);
+
+    // Initiate file buffer and request message
+    const size_t BufferSize = CHUNK_SIZE; // 64 KB chunks
+    char buffer[BufferSize];
+
+    dfs_service::StoreChunk chunk;
+    chunk.set_filename(filename);
+    chunk.set_crc(dfs_file_checksum(filepath, &crc_table));
+
+    struct stat file_stat;
+    lstat(filepath.c_str(), &file_stat);
+    chunk.set_mtime(file_stat.st_mtime);
+
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
+    // Repeatedly read the file and copy into stream message
+    while (!file.eof()) {
+        file.read(buffer, BufferSize);
+        size_t bytesRead = file.gcount();
+        if (bytesRead == 0) {
+            break;
+        }
+
+        // Copy read file into chunk message
+        chunk.set_data(buffer, bytesRead);
+
+        // Send out current chunk
+        if (!writer->Write(chunk)) {
+            std::cerr << "Write error." << std::endl;
+            break;
+        }
+    }
+
+    // Finish the stream
+    writer->WritesDone();
+    Status status = writer->Finish();
+
+    // Check response
+    if (!status.ok()) {
+        std::cout << "Failed to store file with error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+    std::cout << "Successfully stored file." << std::endl;
+    return StatusCode::OK;
 }
 
 

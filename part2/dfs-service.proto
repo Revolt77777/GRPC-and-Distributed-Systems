@@ -7,19 +7,22 @@ service DFSService {
     // Add your service calls here
 
     // 1. REQUIRED (Parts 1 & 2): A method to store files on the server
-
+    rpc StoreFile (stream StoreChunk) returns (StoreResponse);
     // 2. REQUIRED (Parts 1 & 2): A method to fetch files from the server
 
     // 3. REQUIRED (Parts 1 & 2): A method to list all files on the server
 
     // 4. REQUIRED (Parts 1 & 2): A method to get the status of a file on the server
 
+
     // 5. REQUIRED (Part 2 only): A method to request a write lock from the server
+    rpc RequestWriteLock (WriteLockRequest) returns (WriteLockResponse);
 
     // 6. REQUIRED (Part 2 only): A method named CallbackList to handle asynchronous file listing requests
     //                            from a client. This method should return a listing of files along with their
     //                            attribute information. The expected attribute information should include name,
     //                            size, modified time, and creation time.
+    rpc CallbackList (FileRequest) returns (FileList);
 
     // 7. REQUIRED (Part 2 only): A method to delete a file from the server
 
@@ -27,6 +30,37 @@ service DFSService {
 
 
 }
+// Data Chunk for store operation
+message StoreChunk {
+    string filename = 1;
+    bytes data = 2;
+    uint32 crc = 3;
+    int64 mtime = 4;
+}
+// Response for store operation
+message StoreResponse {
 
-// Add your message types here
+}
+
+// Request for get write lock
+message WriteLockRequest{
+    string filename = 1;
+    string client_id = 2;
+}
+
+message WriteLockResponse{
+
+}
+
+// Request message for async callback
+message FileRequest {
+    string name = 1;
+}
+
+// Response containing list of files
+message FileList {
+
+}
+
+
 

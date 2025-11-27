@@ -56,6 +56,9 @@ struct EventStruct {
 // Add any additional shared code here
 //
 
+// Chunk size for stream file transfer
+constexpr size_t CHUNK_SIZE = 65536;
+
 
 #endif
 
