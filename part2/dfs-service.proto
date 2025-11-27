@@ -27,6 +27,7 @@ service DFSService {
     rpc CallbackList (CallBackRequest) returns (FilesList);
 
     // 7. REQUIRED (Part 2 only): A method to delete a file from the server
+    rpc DeleteFile (DeleteRequest) returns (DeleteResponse);
 
     // 8. Any other methods you deem necessary to complete the tasks of this assignment
 
@@ -57,16 +58,6 @@ message FetchChunk {
     int64 mtime = 2;
 }
 
-// Request for get write lock
-message WriteLockRequest{
-    string filename = 1;
-    string client_id = 2;
-}
-
-message WriteLockResponse{
-
-}
-
 // Request for get status operation
 message GetFileStatusRequest {
     string filename = 1;
@@ -89,10 +80,25 @@ message FilesList {
     repeated FileStatus file = 1;
 }
 
+// Request for get write lock
+message WriteLockRequest{
+    string filename = 1;
+    string client_id = 2;
+}
+
+message WriteLockResponse{
+}
 // Request for callbacklist
 message CallBackRequest{
     string name = 1;
 }
 
+// Request for delete operation
+message DeleteRequest {
+    string filename = 1;
+}
 
+// Response for delete operation
+message DeleteResponse {
+}
 

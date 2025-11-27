@@ -419,6 +419,42 @@ public:
         std::cout << "Successfully retrieved list files." << std::endl;
         return Status::OK;
     }
+
+    Status DeleteFile(::grpc::ServerContext* context, const ::dfs_service::DeleteRequest* request, ::dfs_service::DeleteResponse* response) override {
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to delete file: " << request->filename() << std::endl;
+
+        // Check if file exists
+        const std::string filename = request->filename();
+        const std::string filepath = WrapPath(filename);
+
+        // Set up RAII write lock auto releaser
+        auto lock_releaser = std::unique_ptr<std::string, std::function<void(std::string*)>>(
+            new std::string(filename),
+            [this](std::string* fname) {
+                std::lock_guard<std::mutex> lock(this->lock_mutex);
+                this->file_locks.erase(*fname);
+                delete fname;
+            }
+        );
+
+        struct stat buffer;
+        if (stat(filepath.c_str(), &buffer) != 0) {
+            std::cerr << "File does not exist." << std::endl;
+            return Status(StatusCode::NOT_FOUND, "File does not exist.");
+        }
+
+        // Delete the file
+        std::cout << "Deleting file at: " << filepath << std::endl;
+        if (std::remove(filepath.c_str()) != 0) {
+            std::cerr << "Deletion failed." << std::endl;
+            return Status(StatusCode::CANCELLED, "Deletion failed.");
+        }
+
+        // Return OK response
+        std::cout << "Successfully deleted file." << std::endl;
+        return Status::OK;
+    }
 };
 
 //

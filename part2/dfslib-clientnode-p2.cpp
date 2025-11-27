@@ -294,6 +294,35 @@ grpc::StatusCode DFSClientNodeP2::Delete(const std::string &filename) {
     // StatusCode::CANCELLED otherwise
     //
     //
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of deleting file: " << filename << std::endl;
+
+    // Try to acquire write lock of target file
+    StatusCode writeLockStatus = RequestWriteAccess(filename);
+    if (writeLockStatus != StatusCode::OK) {
+        return writeLockStatus;
+    }
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
+    dfs_service::DeleteRequest request;
+    request.set_filename(filename);
+
+    dfs_service::DeleteResponse response;
+
+    // Send out gRPC request
+    Status status = service_stub->DeleteFile(&context, request, &response);
+
+    // Check response
+    if (!status.ok()) {
+        std::cout << "Failed to delete file, error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+    std::cout << "Successfully deleted file。" << std::endl;
+    return StatusCode::OK;
 
 }
 
