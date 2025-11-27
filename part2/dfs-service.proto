@@ -9,6 +9,7 @@ service DFSService {
     // 1. REQUIRED (Parts 1 & 2): A method to store files on the server
     rpc StoreFile (stream StoreChunk) returns (StoreResponse);
     // 2. REQUIRED (Parts 1 & 2): A method to fetch files from the server
+    rpc FetchFile (FetchRequest) returns (stream FetchChunk);
 
     // 3. REQUIRED (Parts 1 & 2): A method to list all files on the server
 
@@ -40,6 +41,19 @@ message StoreChunk {
 // Response for store operation
 message StoreResponse {
 
+}
+
+// Request for fetch operation
+message FetchRequest {
+    string filename = 1;
+    uint32 crc = 2;
+    int64 mtime = 3;
+}
+
+// Data Chunk for fetch operation
+message FetchChunk {
+    bytes data = 1;
+    int64 mtime = 2;
 }
 
 // Request for get write lock

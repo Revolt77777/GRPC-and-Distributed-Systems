@@ -226,6 +226,7 @@ public:
         std::string filename = request->filename();
         std::string client_id = request->client_id();
 
+        std::cout << "-----------------------------------------------------------" << std::endl;
         std::cout << "Receiving request to acquire write lock for file: " << filename << std::endl;
 
         std::lock_guard<std::mutex> lock(lock_mutex);
@@ -244,8 +245,8 @@ public:
         std::cout << "-----------------------------------------------------------" << std::endl;
         std::cout << "Receiving request to store file." << std::endl;
 
+        // Read first chunk to retrieve file info
         dfs_service::StoreChunk chunk;
-        // Read first chunk to validate file status
         if (!reader->Read(&chunk)) {
             std::cerr << "Failed to read first file chunk" << std::endl;
             return Status(StatusCode::CANCELLED, "Failed to read first file chunk");
@@ -253,7 +254,7 @@ public:
         const std::string filename = chunk.filename();
         const std::string filepath = WrapPath(filename);
 
-        // RAII lock auto_releaser
+        // Set up RAII write lock auto releaser
         auto lock_releaser = std::unique_ptr<std::string, std::function<void(std::string*)>>(
             new std::string(filename),
             [this](std::string* fname) {
@@ -263,6 +264,7 @@ public:
             }
         );
 
+        // Compare client and server file, reject unnecessary store operation
         struct stat file_stat;
         if (lstat(filepath.c_str(), &file_stat) == 0) {
             // File exists
@@ -276,13 +278,15 @@ public:
             }
         }
 
+        // Start to store file
         std::cout << "Storing file at: " << filepath << std::endl;
         std::fstream file(filepath, std::ios::out | std::ios::trunc | std::ios::binary);
         if (!file.is_open()) {
-            std::cerr << "Failed to open file" << std::endl;
+            std::cerr << "Failed to initiate local fd." << std::endl;
             return Status(StatusCode::CANCELLED, "Can't open file");
         }
 
+        // Store data in first chunk
         if (!file.write(chunk.data().data(), chunk.data().size())) {
             std::cerr << "Failed to write file" << std::endl;
             return Status(StatusCode::CANCELLED, "Can't write file");
@@ -300,6 +304,59 @@ public:
         return Status::OK;
     }
 
+    Status FetchFile(::grpc::ServerContext* context, const ::dfs_service::FetchRequest* request, ::grpc::ServerWriter< ::dfs_service::FetchChunk>* writer) override {
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to fetch file: " << request->filename() << std::endl;
+
+        // Try to open file, compare client and server file, reject unnecessary fetch operation
+        const std::string filename = request->filename();
+        const std::string filepath = WrapPath(filename);
+
+        struct stat file_stat;
+        if (lstat(filepath.c_str(), &file_stat) != 0) {
+            // File does not exist
+            std::cerr << "File does not exist." << std::endl;
+            return Status(StatusCode::NOT_FOUND, "File does not exist.");
+        }
+        if (dfs_file_checksum(filepath, &crc_table) == request->crc()) {
+            // Files are identical in content
+            return Status(StatusCode::ALREADY_EXISTS, "Exact same file exists on client.");
+        }
+        if (file_stat.st_mtime <= request->mtime()) {
+            // Newer file exists on client
+            return Status(StatusCode::ALREADY_EXISTS, "Newer file exists on client.");
+        }
+
+        // Start to fetch file
+        // Initiate file buffer and chunk message
+        const size_t BufferSize = CHUNK_SIZE; // 64 KB chunks
+        char buffer[BufferSize];
+        dfs_service::FetchChunk chunk;
+        chunk.set_mtime(file_stat.st_mtime);
+        std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
+
+        // Repeatedly read the file and copy into stream message
+        while (!file.eof()) {
+            file.read(buffer, BufferSize);
+            size_t bytesRead = file.gcount();
+            if (bytesRead == 0) {
+                std::cerr << "File read error." << std::endl;
+                return Status(StatusCode::CANCELLED, "File read error.");
+            }
+
+            // Copy read file into chunk message
+            chunk.set_data(buffer, bytesRead);
+
+            // Send out current chunk
+            if (!writer->Write(chunk)) {
+                std::cerr << "Write error." << std::endl;
+                return Status(StatusCode::CANCELLED, "Write error.");
+            }
+        }
+
+        std::cout << "Successfully fetched file." << std::endl;
+        return Status::OK;
+    }
 };
 
 //

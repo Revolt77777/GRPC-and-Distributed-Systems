@@ -65,6 +65,7 @@ grpc::StatusCode DFSClientNodeP2::RequestWriteAccess(const std::string &filename
     // StatusCode::CANCELLED otherwise
     //
     //
+    std::cout << "-----------------------------------------------------------" << std::endl;
     std::cout << "Sending Request of write access on file: " << filename << std::endl;
 
     // Initialize grpc objects and requests
@@ -121,14 +122,8 @@ grpc::StatusCode DFSClientNodeP2::Store(const std::string &filename) {
     const std::string filepath = WrapPath(filename);
     std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
     if (!file) {
-        std::cerr << "File does not exist." << std::endl;
+        std::cerr << "Local file does not exist." << std::endl;
         return StatusCode::NOT_FOUND;
-    }
-
-    // Try to acquire write lock of target file
-    StatusCode writeLockStatus = RequestWriteAccess(filename);
-    if (writeLockStatus != StatusCode::OK) {
-        return writeLockStatus;
     }
 
     // Initiate ClientWriter
@@ -149,6 +144,12 @@ grpc::StatusCode DFSClientNodeP2::Store(const std::string &filename) {
     struct stat file_stat;
     lstat(filepath.c_str(), &file_stat);
     chunk.set_mtime(file_stat.st_mtime);
+
+    // Try to acquire write lock of target file
+    StatusCode writeLockStatus = RequestWriteAccess(filename);
+    if (writeLockStatus != StatusCode::OK) {
+        return writeLockStatus;
+    }
 
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
 
@@ -208,6 +209,68 @@ grpc::StatusCode DFSClientNodeP2::Fetch(const std::string &filename) {
     //
     // Hint: You may want to match the mtime on local files to the server's mtime
     //
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of fetching file: " << filename << std::endl;
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    dfs_service::FetchRequest request;
+    request.set_filename(filename);
+
+    // Gather file info for validation
+    const std::string filepath = WrapPath(filename);
+    struct stat file_stat;
+    if (lstat(filepath.c_str(), &file_stat) == 0) {
+        // File exists
+        request.set_crc(dfs_file_checksum(filepath, &crc_table));
+        request.set_mtime(file_stat.st_mtime);
+    }
+
+    // Start to fetch file
+    std::cout << "Storing file at: " << filepath << std::endl;
+    // Store at temp path
+    const std::string temp_filepath = filepath + ".tmp";
+    std::fstream file(temp_filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Failed to initiate local fd." << std::endl;
+        return StatusCode::CANCELLED;
+    }
+
+    dfs_service::FetchChunk chunk;
+    std::unique_ptr<ClientReader<dfs_service::FetchChunk> > reader = service_stub->FetchFile(&context, request);
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    int64_t server_mtime = 0;
+    // Try and start to receive file
+    while (reader->Read(&chunk)) {
+        if (!file.write(chunk.data().data(), chunk.data().size())) {
+            std::cerr << "Failed to write file." << std::endl;
+            return StatusCode::CANCELLED;
+        }
+        // Record server mtime
+        if (server_mtime == 0) {
+            server_mtime = chunk.mtime();
+        }
+    }
+    Status status = reader->Finish();
+    file.close();
+
+    // Cleanup if error occurred
+    if (!status.ok()) {
+        std::remove(temp_filepath.c_str());
+        std::cout << "Failed to fetch file with error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+    std::remove(filepath.c_str());           // Delete old (if exists)
+    std::rename(temp_filepath.c_str(), filepath.c_str());  // Rename temp
+    // Set mtime to match with server
+    struct utimbuf new_times;
+    new_times.actime = server_mtime;
+    new_times.modtime = server_mtime;
+    utime(filepath.c_str(), &new_times);
+
+    std::cout << "Successfully fetched file." << std::endl;
+    return StatusCode::OK;
 }
 
 grpc::StatusCode DFSClientNodeP2::Delete(const std::string &filename) {
