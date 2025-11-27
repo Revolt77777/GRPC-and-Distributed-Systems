@@ -37,8 +37,8 @@ using dfs_service::DFSService;
 // message types you are using in your `dfs-service.proto` file
 // to indicate a file request and a listing of files from the server
 //
-using FileRequestType = dfs_service::FileRequest;
-using FileListResponseType = dfs_service::FileList;
+using FileRequestType = dfs_service::CallBackRequest;
+using FileListResponseType = dfs_service::FilesList;
 
 extern dfs_log_level_e DFS_LOG_LEVEL;
 
@@ -355,6 +355,68 @@ public:
         }
 
         std::cout << "Successfully fetched file." << std::endl;
+        return Status::OK;
+    }
+
+    Status GetFileStatus(::grpc::ServerContext* context, const ::dfs_service::GetFileStatusRequest* request, ::dfs_service::FileStatus* response) override {
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to get status of file: " << request->filename() << std::endl;
+
+        // Check if file exists
+        const std::string filename = request->filename();
+        const std::string filepath = WrapPath(filename);
+        struct stat f_stat;
+        if (stat(filepath.c_str(), &f_stat) != 0) {
+            std::cerr << "File does not exist." << std::endl;
+            return Status(StatusCode::NOT_FOUND, "File does not exist.");
+        }
+
+        // Acquire stats
+        response->set_filename(filename);
+        response->set_filesize(f_stat.st_size);
+        response->set_mtime(f_stat.st_mtime);
+
+        // Return OK response
+        std::cout << "Successfully retrieved file status." << std::endl;
+        return Status::OK;
+    }
+
+    Status ListFiles(::grpc::ServerContext* context, const ::dfs_service::ListFilesRequest* request, ::dfs_service::FilesList* files_list) override {
+        std::cout << "-----------------------------------------------------------" << std::endl;
+        std::cout << "Receiving request to list all files on server." << std::endl;
+
+        // Invoke dirent.h to list all files on mount_path
+        DIR* dir = opendir(mount_path.c_str());
+        if (!dir) {
+            std::cerr << "Directory does not exist." << std::endl;
+            return Status(StatusCode::CANCELLED, "Directory does not exist.");
+        }
+
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            std::string filename = entry->d_name;
+
+            // Skip . and ..
+            if (filename == "." || filename == "..") continue;
+
+            // Get full path
+            std::string filepath = WrapPath(filename);
+
+            // Get file stats
+            struct stat file_stat;
+            if (stat(filepath.c_str(), &file_stat) == 0) {
+                // Skip directories, only include files
+                if (S_ISREG(file_stat.st_mode)) {
+                    // Add to files list
+                    dfs_service::FileStatus *file = files_list->add_file();
+                    file->set_filename(filename);
+                    file->set_mtime(file_stat.st_mtime);
+                }
+            }
+        }
+        closedir(dir);
+
+        std::cout << "Successfully retrieved list files." << std::endl;
         return Status::OK;
     }
 };

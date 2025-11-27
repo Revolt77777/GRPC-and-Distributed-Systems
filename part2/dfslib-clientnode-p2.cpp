@@ -40,8 +40,8 @@ extern dfs_log_level_e DFS_LOG_LEVEL;
 // message types you are using to indicate
 // a file request and a listing of files from the server.
 //
-using FileRequestType = dfs_service::FileRequest;
-using FileListResponseType = dfs_service::FileList;
+using FileRequestType = dfs_service::CallBackRequest;
+using FileListResponseType = dfs_service::FilesList;
 
 DFSClientNodeP2::DFSClientNodeP2() : DFSClientNode() {}
 DFSClientNodeP2::~DFSClientNodeP2() {}
@@ -315,6 +315,50 @@ grpc::StatusCode DFSClientNodeP2::List(std::map<std::string,int>* file_map, bool
     // StatusCode::CANCELLED otherwise
     //
     //
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of list all files on server." << std::endl;
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
+    dfs_service::ListFilesRequest request;
+
+    dfs_service::FilesList files_list;
+
+    // Send out gRPC request
+    Status status = service_stub->ListFiles(&context, request, &files_list);
+
+    // Check response
+    if (!status.ok()) {
+        std::cout << "Unable to list files, error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+
+    std::cout << "Successfully retrieved files on file server: " << std::endl;
+    std::cout << "-----" << std::endl;
+    // Append filename-mtime pairs into file_map
+    if (file_map != nullptr) {
+        for (const auto& file : files_list.file()) {
+            (*file_map)[file.filename()] = file.mtime();
+        }
+    }
+
+    // Print out if display indicator is on
+    if (display) {
+        int count = 0;
+        for (const auto& file : files_list.file()) {
+            std::cout << "File " << count ++ << ": " << std::endl;
+            std::cout << "  File name: " << file.filename() << std::endl;
+            std::cout << "  File last modified time: " << file.mtime() << std::endl;
+        }
+        if (count == 0) {
+            std::cout << "No files exist on server." << std::endl;
+        }
+    }
+
+    return StatusCode::OK;
 }
 
 grpc::StatusCode DFSClientNodeP2::Stat(const std::string &filename, void* file_status) {
@@ -336,6 +380,41 @@ grpc::StatusCode DFSClientNodeP2::Stat(const std::string &filename, void* file_s
     // StatusCode::CANCELLED otherwise
     //
     //
+    std::cout << "-----------------------------------------------------------" << std::endl;
+    std::cout << "Sending Request of getting status of file: " << filename << std::endl;
+
+    // Initialize grpc objects and requests
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
+    dfs_service::GetFileStatusRequest request;
+    request.set_filename(filename);
+
+    // Declare pointer and local storage in case *file_status is not explicitly entered
+    dfs_service::FileStatus local_response;
+    dfs_service::FileStatus* response;
+
+    if (file_status == nullptr) {
+        response = &local_response;
+    } else {
+        response = static_cast<dfs_service::FileStatus*>(file_status);
+    }
+
+    // Send out gRPC request
+    Status status = service_stub->GetFileStatus(&context, request, response);
+
+    // Check response
+    if (!status.ok()) {
+        std::cout << "Unable to get file status, error status code: " << status.error_code() << std::endl;
+        std::cout << "Error message: " << status.error_message() << std::endl;
+        return status.error_code();
+    }
+    std::cout << "Successfully retrieved file status: " << std::endl;
+    std::cout << "  File name: " << response->filename() << std::endl;
+    std::cout << "  File size: " << response->filesize() << std::endl;;
+    std::cout << "  File last modified time: " << response->mtime() << std::endl;
+
+    return StatusCode::OK;
 }
 
 void DFSClientNodeP2::InotifyWatcherCallback(std::function<void()> callback) {

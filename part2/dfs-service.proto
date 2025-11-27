@@ -12,9 +12,10 @@ service DFSService {
     rpc FetchFile (FetchRequest) returns (stream FetchChunk);
 
     // 3. REQUIRED (Parts 1 & 2): A method to list all files on the server
+    rpc ListFiles (ListFilesRequest) returns (FilesList);
 
     // 4. REQUIRED (Parts 1 & 2): A method to get the status of a file on the server
-
+    rpc GetFileStatus (GetFileStatusRequest) returns (FileStatus);
 
     // 5. REQUIRED (Part 2 only): A method to request a write lock from the server
     rpc RequestWriteLock (WriteLockRequest) returns (WriteLockResponse);
@@ -23,7 +24,7 @@ service DFSService {
     //                            from a client. This method should return a listing of files along with their
     //                            attribute information. The expected attribute information should include name,
     //                            size, modified time, and creation time.
-    rpc CallbackList (FileRequest) returns (FileList);
+    rpc CallbackList (CallBackRequest) returns (FilesList);
 
     // 7. REQUIRED (Part 2 only): A method to delete a file from the server
 
@@ -66,14 +67,31 @@ message WriteLockResponse{
 
 }
 
-// Request message for async callback
-message FileRequest {
-    string name = 1;
+// Request for get status operation
+message GetFileStatusRequest {
+    string filename = 1;
 }
 
-// Response containing list of files
-message FileList {
+// Status for single file
+message FileStatus{
+    string filename = 1;
+    int64 filesize = 2;
+    int64 mtime = 3;
+    uint32 crc = 4;
+}
 
+// Request for list all files
+message ListFilesRequest {
+}
+
+// Response for list all files - files list
+message FilesList {
+    repeated FileStatus file = 1;
+}
+
+// Request for callbacklist
+message CallBackRequest{
+    string name = 1;
 }
 
 
