@@ -101,6 +101,12 @@ private:
     /** Mutex for write locks **/
     std::mutex lock_mutex;
 
+    /** Mutex for synchronization_flag **/
+    std::mutex synchronization_flag_mutex;
+
+    /** Flag for modification of files **/
+    bool synchronization_flag = false;
+
     /** Write lock table: filename -> client_id **/
     std::map<std::string, std::string> file_locks;
 
@@ -174,6 +180,37 @@ public:
         // is aware of. The client will then need to make the appropriate calls based on those changes.
         //
 
+        // Invoke dirent.h to list all files on mount_path
+        DIR* dir = opendir(mount_path.c_str());
+        if (!dir) {
+            std::cerr << "Directory does not exist." << std::endl;
+            return;
+        }
+
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            std::string filename = entry->d_name;
+
+            // Skip . and ..
+            if (filename == "." || filename == "..") continue;
+
+            // Get full path
+            std::string filepath = WrapPath(filename);
+
+            // Get file stats
+            struct stat file_stat;
+            if (stat(filepath.c_str(), &file_stat) == 0) {
+                // Skip directories, only include files
+                if (S_ISREG(file_stat.st_mode)) {
+                    // Add to files list
+                    dfs_service::FileStatus *file = response->add_file();
+                    file->set_crc(dfs_file_checksum(filepath, &crc_table));
+                    file->set_filename(filename);
+                    file->set_mtime(file_stat.st_mtime);
+                }
+            }
+        }
+        closedir(dir);
     }
 
     /**
@@ -191,7 +228,14 @@ public:
             // Note: you will need to leave the basic queue structure as-is, but you
             // may add any additional code you feel is necessary.
             //
-
+            {
+                // Check for synchronization flag for every loop, only enter critical section when needed (synchronization_flag)
+                std::lock_guard<std::mutex> lock(synchronization_flag_mutex);
+                if (!synchronization_flag) {
+                    continue;
+                }
+                synchronization_flag = false;
+            }
 
             // Guarded section for queue
             {
@@ -233,7 +277,7 @@ public:
 
         if (file_locks.count(filename) && file_locks[filename] != client_id) {
             // Locked by different client
-            return Status(StatusCode::RESOURCE_EXHAUSTED, "Lock held by another client");
+            return Status(StatusCode::RESOURCE_EXHAUSTED, "Lock held by another client.");
         }
 
         file_locks[filename] = client_id;  // Grant lock
@@ -273,7 +317,11 @@ public:
                 return Status(StatusCode::ALREADY_EXISTS, "Exact same file exists on server.");
             }
             if (file_stat.st_mtime >= chunk.mtime()) {
-                // Newer file exists on server
+                // Newer file exists on server -> Triggers a dfs synchronization
+                {
+                    std::lock_guard<std::mutex> lock(synchronization_flag_mutex);
+                    synchronization_flag = true;
+                }
                 return Status(StatusCode::ALREADY_EXISTS, "Newer file exists on server.");
             }
         }
@@ -301,6 +349,11 @@ public:
         }
 
         std::cout << "Successfully stored file at: " << filepath << std::endl;
+        {
+            // Triggers a dfs synchronization
+            std::lock_guard<std::mutex> lock(synchronization_flag_mutex);
+            synchronization_flag = true;
+        }
         return Status::OK;
     }
 
@@ -308,7 +361,7 @@ public:
         std::cout << "-----------------------------------------------------------" << std::endl;
         std::cout << "Receiving request to fetch file: " << request->filename() << std::endl;
 
-        // Try to open file, compare client and server file, reject unnecessary fetch operation
+        // Try to open file
         const std::string filename = request->filename();
         const std::string filepath = WrapPath(filename);
 
@@ -318,6 +371,8 @@ public:
             std::cerr << "File does not exist." << std::endl;
             return Status(StatusCode::NOT_FOUND, "File does not exist.");
         }
+
+        // Compare client and server file, reject unnecessary fetch operation
         if (dfs_file_checksum(filepath, &crc_table) == request->crc()) {
             // Files are identical in content
             return Status(StatusCode::ALREADY_EXISTS, "Exact same file exists on client.");
@@ -329,15 +384,14 @@ public:
 
         // Start to fetch file
         // Initiate file buffer and chunk message
-        const size_t BufferSize = CHUNK_SIZE; // 64 KB chunks
-        char buffer[BufferSize];
+        char buffer[CHUNK_SIZE]; // 64 KB chunks
         dfs_service::FetchChunk chunk;
         chunk.set_mtime(file_stat.st_mtime);
         std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
 
         // Repeatedly read the file and copy into stream message
         while (!file.eof()) {
-            file.read(buffer, BufferSize);
+            file.read(buffer, CHUNK_SIZE);
             size_t bytesRead = file.gcount();
             if (bytesRead == 0) {
                 std::cerr << "File read error." << std::endl;
@@ -453,6 +507,11 @@ public:
 
         // Return OK response
         std::cout << "Successfully deleted file." << std::endl;
+        {
+            // Triggers a dfs synchronization
+            std::lock_guard<std::mutex> lock(synchronization_flag_mutex);
+            synchronization_flag = true;
+        }
         return Status::OK;
     }
 };

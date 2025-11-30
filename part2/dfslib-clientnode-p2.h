@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <limits.h>
 #include <chrono>
 #include <mutex>
@@ -142,6 +143,9 @@ public:
     // You may add any additional declarations of methods or variables that you need here.
     //
 
-
+private:
+    /** Mutex for client threads synchronization **/
+    std::mutex client_mutex;
 };
+
 #endif

@@ -22,6 +22,9 @@
 #include "src/dfslibx-clientnode-p2.h"
 #include "dfslib-shared-p2.h"
 #include "dfslib-clientnode-p2.h"
+
+#include <dirent.h>
+
 #include "proto-src/dfs-service.grpc.pb.h"
 
 using grpc::Status;
@@ -75,6 +78,7 @@ grpc::StatusCode DFSClientNodeP2::RequestWriteAccess(const std::string &filename
     request.set_filename(filename);
     request.set_client_id(client_id);
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+
     // Send out gRPC request
     Status status = service_stub->RequestWriteLock(&context, request, &response);
 
@@ -118,7 +122,7 @@ grpc::StatusCode DFSClientNodeP2::Store(const std::string &filename) {
     std::cout << "-----------------------------------------------------------" << std::endl;
     std::cout << "Sending Request of storing file: " << filename << std::endl;
 
-    // Try to open file
+    // Try to open client local file
     const std::string filepath = WrapPath(filename);
     std::ifstream file(filepath, std::ifstream::in | std::ifstream::binary);
     if (!file) {
@@ -126,24 +130,20 @@ grpc::StatusCode DFSClientNodeP2::Store(const std::string &filename) {
         return StatusCode::NOT_FOUND;
     }
 
-    // Initiate ClientWriter
+    // Initiate gRPC objects
     dfs_service::StoreResponse response;
     grpc::ClientContext context;
-
-    std::unique_ptr<ClientWriter<dfs_service::StoreChunk> > writer = service_stub->
-            StoreFile(&context, &response);
-
-    // Initiate file buffer and request message
-    const size_t BufferSize = CHUNK_SIZE; // 64 KB chunks
-    char buffer[BufferSize];
-
     dfs_service::StoreChunk chunk;
+
+    // Gather file info for server-side validation
     chunk.set_filename(filename);
     chunk.set_crc(dfs_file_checksum(filepath, &crc_table));
-
     struct stat file_stat;
     lstat(filepath.c_str(), &file_stat);
     chunk.set_mtime(file_stat.st_mtime);
+
+    // Initiate file buffer for stream transfer
+    char buffer[CHUNK_SIZE]; // 64 KB chunks
 
     // Try to acquire write lock of target file
     StatusCode writeLockStatus = RequestWriteAccess(filename);
@@ -151,11 +151,13 @@ grpc::StatusCode DFSClientNodeP2::Store(const std::string &filename) {
         return writeLockStatus;
     }
 
+    // Start to store file
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    std::unique_ptr<ClientWriter<dfs_service::StoreChunk> > writer = service_stub->StoreFile(&context, &response);
 
     // Repeatedly read the file and copy into stream message
     while (!file.eof()) {
-        file.read(buffer, BufferSize);
+        file.read(buffer, CHUNK_SIZE);
         size_t bytesRead = file.gcount();
         if (bytesRead == 0) {
             break;
@@ -185,7 +187,6 @@ grpc::StatusCode DFSClientNodeP2::Store(const std::string &filename) {
     return StatusCode::OK;
 }
 
-
 grpc::StatusCode DFSClientNodeP2::Fetch(const std::string &filename) {
 
     //
@@ -212,12 +213,13 @@ grpc::StatusCode DFSClientNodeP2::Fetch(const std::string &filename) {
     std::cout << "-----------------------------------------------------------" << std::endl;
     std::cout << "Sending Request of fetching file: " << filename << std::endl;
 
-    // Initialize grpc objects and requests
+    // Initialize grpc objects
     grpc::ClientContext context;
     dfs_service::FetchRequest request;
-    request.set_filename(filename);
+    dfs_service::FetchChunk chunk;
 
-    // Gather file info for validation
+    // Gather file info for server-side validation
+    request.set_filename(filename);
     const std::string filepath = WrapPath(filename);
     struct stat file_stat;
     if (lstat(filepath.c_str(), &file_stat) == 0) {
@@ -226,43 +228,57 @@ grpc::StatusCode DFSClientNodeP2::Fetch(const std::string &filename) {
         request.set_mtime(file_stat.st_mtime);
     }
 
-    // Start to fetch file
+    // Send out fetch request
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    std::unique_ptr<ClientReader<dfs_service::FetchChunk> > reader = service_stub->FetchFile(&context, request);
+
+    // Try to read first chunk before opening file -> in case request got rejected
+    if (!reader->Read(&chunk)) {
+        // No data received - check status
+        Status status = reader->Finish();
+        if (!status.ok()) {
+            std::cout << "Failed to fetch file with error status code: " << status.error_code() << std::endl;
+            std::cout << "Error message: " << status.error_message() << std::endl;
+        }
+        return status.error_code();
+    }
+
+    // Got first chunk - now open file for writing
     std::cout << "Storing file at: " << filepath << std::endl;
-    // Store at temp path
-    const std::string temp_filepath = filepath + ".tmp";
-    std::fstream file(temp_filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+    std::fstream file(filepath, std::ios::out | std::ios::trunc | std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "Failed to initiate local fd." << std::endl;
         return StatusCode::CANCELLED;
     }
 
-    dfs_service::FetchChunk chunk;
-    std::unique_ptr<ClientReader<dfs_service::FetchChunk> > reader = service_stub->FetchFile(&context, request);
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
-    int64_t server_mtime = 0;
-    // Try and start to receive file
+    int64_t server_mtime = chunk.mtime();
+
+    // Write first chunk
+    if (!file.write(chunk.data().data(), chunk.data().size())) {
+        std::cerr << "Failed to write file." << std::endl;
+        file.close();
+        return StatusCode::CANCELLED;
+    }
+
+    // Continue receiving remaining chunks
     while (reader->Read(&chunk)) {
         if (!file.write(chunk.data().data(), chunk.data().size())) {
             std::cerr << "Failed to write file." << std::endl;
+            file.close();
             return StatusCode::CANCELLED;
         }
-        // Record server mtime
-        if (server_mtime == 0) {
-            server_mtime = chunk.mtime();
-        }
     }
+
     Status status = reader->Finish();
     file.close();
 
-    // Cleanup if error occurred
+    // Check final status
     if (!status.ok()) {
-        std::remove(temp_filepath.c_str());
         std::cout << "Failed to fetch file with error status code: " << status.error_code() << std::endl;
         std::cout << "Error message: " << status.error_message() << std::endl;
         return status.error_code();
     }
-    std::remove(filepath.c_str());           // Delete old (if exists)
-    std::rename(temp_filepath.c_str(), filepath.c_str());  // Rename temp
+
     // Set mtime to match with server
     struct utimbuf new_times;
     new_times.actime = server_mtime;
@@ -297,22 +313,20 @@ grpc::StatusCode DFSClientNodeP2::Delete(const std::string &filename) {
     std::cout << "-----------------------------------------------------------" << std::endl;
     std::cout << "Sending Request of deleting file: " << filename << std::endl;
 
+    // Initialize grpc objects
+    grpc::ClientContext context;
+    dfs_service::DeleteRequest request;
+    dfs_service::DeleteResponse response;
+    request.set_filename(filename);
+
     // Try to acquire write lock of target file
     StatusCode writeLockStatus = RequestWriteAccess(filename);
     if (writeLockStatus != StatusCode::OK) {
         return writeLockStatus;
     }
 
-    // Initialize grpc objects and requests
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
-
-    dfs_service::DeleteRequest request;
-    request.set_filename(filename);
-
-    dfs_service::DeleteResponse response;
-
     // Send out gRPC request
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
     Status status = service_stub->DeleteFile(&context, request, &response);
 
     // Check response
@@ -321,7 +335,7 @@ grpc::StatusCode DFSClientNodeP2::Delete(const std::string &filename) {
         std::cout << "Error message: " << status.error_message() << std::endl;
         return status.error_code();
     }
-    std::cout << "Successfully deleted file。" << std::endl;
+    std::cout << "Successfully deleted file." << std::endl;
     return StatusCode::OK;
 
 }
@@ -347,15 +361,13 @@ grpc::StatusCode DFSClientNodeP2::List(std::map<std::string,int>* file_map, bool
     std::cout << "-----------------------------------------------------------" << std::endl;
     std::cout << "Sending Request of list all files on server." << std::endl;
 
-    // Initialize grpc objects and requests
+    // Initialize grpc objects
     grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
-
     dfs_service::ListFilesRequest request;
-
     dfs_service::FilesList files_list;
 
     // Send out gRPC request
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
     Status status = service_stub->ListFiles(&context, request, &files_list);
 
     // Check response
@@ -414,8 +426,6 @@ grpc::StatusCode DFSClientNodeP2::Stat(const std::string &filename, void* file_s
 
     // Initialize grpc objects and requests
     grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
-
     dfs_service::GetFileStatusRequest request;
     request.set_filename(filename);
 
@@ -430,6 +440,7 @@ grpc::StatusCode DFSClientNodeP2::Stat(const std::string &filename, void* file_s
     }
 
     // Send out gRPC request
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
     Status status = service_stub->GetFileStatus(&context, request, response);
 
     // Check response
@@ -466,8 +477,7 @@ void DFSClientNodeP2::InotifyWatcherCallback(std::function<void()> callback) {
     // Hint: how can you prevent race conditions between this thread and
     // the async thread when a file event has been signaled?
     //
-
-
+    std::lock_guard<std::mutex> lock(client_mutex);
     callback();
 
 }
@@ -512,7 +522,7 @@ void DFSClientNodeP2::HandleCallbackList() {
             //
             // Consider adding a critical section or RAII style lock here
             //
-
+            std::lock_guard<std::mutex> lock(client_mutex);
             // The tag is the memory location of the call_data object
             AsyncClientData<FileListResponseType> *call_data = static_cast<AsyncClientData<FileListResponseType> *>(tag);
 
@@ -540,7 +550,54 @@ void DFSClientNodeP2::HandleCallbackList() {
                 // Do nothing?
                 //
 
+                // Get client-side files list
+                DIR* dir = opendir(mount_path.c_str());
+                if (!dir) {
+                    dfs_log(LL_ERROR) << "Failed to open dir";
+                }
+                std::map<std::string, int64_t> client_files;
+                struct dirent* entry;
+                while ((entry = readdir(dir)) != nullptr) {
+                    if (entry->d_type == DT_REG) {
+                        std::string filename = entry->d_name;
+                        std::string filepath = WrapPath(filename);
 
+                        struct stat file_stat;
+                        if (lstat(filepath.c_str(), &file_stat) == 0) {
+                            client_files[filename] = file_stat.st_mtime;
+                        }
+                    }
+                }
+                closedir(dir);
+
+                // Check every file existing on server
+                auto server_files = call_data->reply.file();
+                for (const auto& file : server_files) {
+                    // Server file not exist on client, fetch
+                    if (!client_files.count(file.filename())){
+                        Fetch(file.filename());
+                    }
+                    // Both file exist, same -> skip, not same -> compare mtime
+                    else if (dfs_file_checksum(WrapPath(file.filename()), &crc_table) != file.crc()) {
+                        if (client_files[file.filename()] < file.mtime()) {
+                            // Server file newer
+                            Fetch(file.filename());
+                        }
+                        else if (client_files[file.filename()] > file.mtime()) {
+                            // Client file newer
+                            Store(file.filename());
+                        }
+                    }
+
+                    // Current server file exists on client and operated on, remove from client list
+                    client_files.erase(file.filename());
+                }
+
+                // Remaining client files should be deleted to synchronize with server file list
+                for (const auto& file : client_files) {
+                    std::string filepath = WrapPath(file.first);
+                    remove(filepath.c_str());
+                }
 
             } else {
                 dfs_log(LL_ERROR) << "Status was not ok. Will try again in " << DFS_RESET_TIMEOUT << " milliseconds.";

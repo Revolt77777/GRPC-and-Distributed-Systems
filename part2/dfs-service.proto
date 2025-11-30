@@ -42,7 +42,6 @@ message StoreChunk {
 }
 // Response for store operation
 message StoreResponse {
-
 }
 
 // Request for fetch operation
